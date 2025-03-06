@@ -1,58 +1,65 @@
--- Spark Module 10/3/2024
--- Eli 
-
 local Spark = {}
 
 --- Emit particles from a ParticleEmitter.
--- @param Emitter ParticleEmitter The emitter instance that emits particles.
--- @return ParticleEmitter|nil The emitter instance if successful, or nil if invalid.
-
-function Spark:EmitFunction(Emitter: ParticleEmitter): ParticleEmitter | nil
+-- @param Emitter ParticleEmitter - The emitter to use.
+-- @return ParticleEmitter|nil - The emitter if successful.
+function Spark.EmitFromEmitter(Emitter: ParticleEmitter): ParticleEmitter | nil
 	assert(typeof(Emitter) == "Instance" and Emitter:IsA("ParticleEmitter"), "Emitter must be a ParticleEmitter")
 
-	-- Attributes for controlling the emitter
-	local EmitCount = Emitter:GetAttribute("EmitCount")
-	local EmitDelay = Emitter:GetAttribute("EmitDelay")
-	local EmitDuration = Emitter:GetAttribute('EmitDuration')
+	local Count = Emitter:GetAttribute("EmitCount") or 1
+	local DelayTime = Emitter:GetAttribute("EmitDelay") or 0
+	local Duration = Emitter:GetAttribute("EmitDuration") or 0
 
-	-- Default EmitCount if none or less than 1
-	if not EmitCount or EmitCount < 1 then
-		EmitCount = 1
-	end
+	-- Cancellation flag to allow stopping the emission.
+	Emitter._CancelEmission = false
 
-	-- Emit particles after the specified delay
-	task.delay(EmitDelay, function()
-		if EmitDuration and EmitDuration > 0 then
-			local startTime = os.clock()
-			while os.clock() - startTime < EmitDuration do
-				Emitter:Emit(EmitCount)
-				wait(1 / Emitter.Rate)
+	task.delay(DelayTime, function()
+		if Duration > 0 then
+			local StartTime = tick()
+			while tick() - StartTime < Duration and not Emitter._CancelEmission do
+				local Success, Err = pcall(function()
+					Emitter:Emit(Count)
+				end)
+				if not Success then
+					warn("Error emitting particles:", Err)
+				end
+				task.wait(1 / Emitter.Rate)
 			end
 		else
-			Emitter:Emit(EmitCount or Emitter.Rate)
+			pcall(function()
+				Emitter:Emit(Count)
+			end)
 		end
 	end)
 
 	return Emitter
 end
 
---- Enable a Beam instance.
--- @param Beam Beam The beam instance to enable.
--- @return Beam|nil The beam instance if successful, or nil if invalid.
+--- Cancel emission for a ParticleEmitter.
+-- @param Emitter ParticleEmitter - The emitter to cancel.
+function Spark.CancelEmission(Emitter: ParticleEmitter)
+	assert(typeof(Emitter) == "Instance" and Emitter:IsA("ParticleEmitter"), "Emitter must be a ParticleEmitter")
+	Emitter._CancelEmission = true
+end
 
-function Spark:EnableBeam(Beam: Beam): Beam | nil
+--- Activate a Beam.
+-- @param Beam Beam - The beam instance to activate.
+-- @return Beam|nil - The beam if successful.
+function Spark.ActivateBeam(Beam: Beam): Beam | nil
 	assert(typeof(Beam) == "Instance" and Beam:IsA("Beam"), "Beam must be a Beam")
 
-	-- Attributes for controlling the beam
-	local BeamDuration = Beam:GetAttribute("EmitDuration")
-	local BeamDelay = Beam:GetAttribute("EmitDelay")
+	local Duration = Beam:GetAttribute("EmitDuration") or 0
+	local DelayTime = Beam:GetAttribute("EmitDelay") or 0
 
-	-- Enable beam after specified delay
-	task.delay(BeamDelay or 0, function()
+	Beam._CancelEmission = false
+
+	task.delay(DelayTime, function()
 		Beam.Enabled = true
-		if BeamDuration and BeamDuration > 0 then
-			task.delay(BeamDuration, function()
-				Beam.Enabled = false
+		if Duration > 0 then
+			task.delay(Duration, function()
+				if not Beam._CancelEmission then
+					Beam.Enabled = false
+				end
 			end)
 		end
 	end)
@@ -60,31 +67,26 @@ function Spark:EnableBeam(Beam: Beam): Beam | nil
 	return Beam
 end
 
---- Emit particles from various emitters attached to an instance.
--- @param VFXAttachment Instance The instance containing ParticleEmitters or Beams.
--- @return nil
+--- Cancel beam activation.
+-- @param Beam Beam - The beam instance to cancel.
+function Spark.CancelBeam(Beam: Beam)
+	assert(typeof(Beam) == "Instance" and Beam:IsA("Beam"), "Beam must be a Beam")
+	Beam._CancelEmission = true
+	Beam.Enabled = false
+end
 
-
-function Spark:EmitParticles(VFXAttachment: Instance): nil
-	if VFXAttachment:IsA("ParticleEmitter") then
-		self:EmitFunction(VFXAttachment)
-		return
-	elseif VFXAttachment:IsA("Beam") then
-		self:EnableBeam(VFXAttachment)
-		return
-	end
-
-	-- Iterate through children and call appropriate function
-	for _, Emitter in ipairs(VFXAttachment:GetChildren()) do
-		if Emitter:IsA('ParticleEmitter') then
-			self:EmitFunction(Emitter)
-		elseif Emitter:IsA('Beam') then
-			self:EnableBeam(Emitter)
-		else
-			Spark:EmitParticles(Emitter)
+--- Process an instance for ParticleEmitters or Beams.
+-- @param Attachment Instance - The instance containing VFX components.
+function Spark.ProcessVFXAttachment(Attachment: Instance): nil
+	if Attachment:IsA("ParticleEmitter") then
+		Spark.EmitFromEmitter(Attachment)
+	elseif Attachment:IsA("Beam") then
+		Spark.ActivateBeam(Attachment)
+	else
+		for _, Child in ipairs(Attachment:GetChildren()) do
+			Spark.ProcessVFXAttachment(Child)
 		end
 	end
-
 	return nil
 end
 
